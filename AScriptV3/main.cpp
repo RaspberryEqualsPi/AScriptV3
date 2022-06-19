@@ -5,16 +5,19 @@
 #include <fstream>
 #include <map>
 #include <sstream>
+#include <filesystem>
 enum class ASCTypes {
     string = 0,
     integer = 1,
     nil = 2,
     errored = 3
 };
-enum class LineType{
+enum class LineType {
     funccall = 0,
     unknown = 1,
-    set = 2
+    set = 2,
+    ascgoto = 3,
+    ifgoto = 4,
 };
 struct ASCType {
     std::string name;
@@ -29,7 +32,7 @@ struct ASCArg {
     uintptr_t first;
     ASCType second;
 };
-typedef void(*ASCFunc)(std::vector < ASCArg >);
+typedef void(*ASCFunc)(std::vector<ASCArg>, void*);
 namespace ASC {
     std::string ASCToString(ASCArg arg) {
         return *(std::string*)arg.first; // pointer to string
@@ -43,7 +46,8 @@ namespace ASC {
     class ASCContext {
     public:
         void regfunc(std::string name, ASCFunc ptr) {
-            funcreg.push_back(std::pair < std::string, ASCFunc >(name, ptr));
+            
+            funcreg.push_back(std::pair<std::string, ASCFunc>(name, ptr));
         }
         void run() {
             std::string unused;
@@ -58,10 +62,15 @@ namespace ASC {
                     counter++;
                 }
             }
-            for (int i = 0; i < lines.size(); i++) {
-                std::string line = code.substr(lines[i].first, lines[i].second);
+            while (cline < lines.size()){
+                std::string line = code.substr(lines[cline].first, lines[cline].second);
                 runLine(line);
+                cline++;
+                //std::cout << "cline: " << cline << "\n";
             }
+        }
+        std::map<std::string, std::string>& getVars() {
+            return vars;
         }
         ASCContext(std::string filename) {
             std::fstream code1;
@@ -73,10 +82,12 @@ namespace ASC {
         }
     private:
         int lines = 0;
+        int cline = 0;
         std::string code;
-        std::vector < std::pair < std::string, ASCFunc >> funcreg;
+        std::vector<std::pair<std::string, ASCFunc>> funcreg;
         std::map<std::string, std::string> vars;
         void runLine(std::string line){
+            //std::cout << "\nline: " << line << "\n";
             while (line[0] == '\n' || line[0] == '\r') {
                 line.erase(line.begin());
             }
@@ -87,7 +98,7 @@ namespace ASC {
                 std::vector<ASCArg> args = lexArguments(line.substr(line.find('(') + 1, line.size() - line.find('(')).substr(0, line.find(')'))); // gets whats inside of the parenthesis
                 for (int i = 0; i < funcreg.size(); i++) {
                     if (funcreg[i].first == line.substr(0, line.find('('))) {
-                        funcreg[i].second(args);
+                        funcreg[i].second(args, (void*)this);
                         //std::cout << "function found\n";
                     }
                 }
@@ -107,24 +118,68 @@ namespace ASC {
                 }
                 //std::cout << "result one: " << result << "end\n";
             }
+            if (lt == LineType::ascgoto) {
+                cline = stoi(line.substr(5, line.size() - 5)) - 2;
+                //std::cout << "did goto" << cline << "\n";
+            }
+            if (lt == LineType::ifgoto) {
+                std::string after = line.substr(7, line.size() - 7);
+                std::string condition = after.substr(0, after.find(' '));
+                std::string go = after.substr(after.find(' ') + 1, after.size() - after.find(' ') - 1);
+                //std::cout << "condition: " << condition << ", size: " << condition.size() << "\n";
+                //std::cout << "line: " << go << ", size: " << go.size() << "\n";
+                if (vars.count(condition) > 0) {
+                    if (stoi(vars[condition]) > 0) {
+                        cline = stoi(go) - 2;
+                        //std::cout << "condition is " << vars["condition"] << " with size " << vars["condition"].size() << "\n";
+                        //std::cout << "hello world: " << stoi(vars[condition]) << "\n";
+                        //std::cout << "set line to " << cline << "\n";
+                    }
+                }
+                else {
+                    fprintf(stderr, "Error on line %i: Undefined variable \"%s\" used in ifgoto statement", cline, condition.c_str());
+                }
+            }
         }
         LineType getLineType(std::string& line) {
             bool isFunc = false;
             bool isSet = false;
-            for (int i = 0; i < funcreg.size(); i++) {
-                std::string funcname = funcreg[i].first + "(";
-                if (line.substr(0, funcname.size()) == funcname) {
-                    isFunc = true;
+            bool isGoto = false;
+            bool isIfGoto = false;
+            try {
+                for (int i = 0; i < funcreg.size(); i++) {
+                    std::string funcname = funcreg[i].first + "(";
+                    if (line.size() >= funcname.size()) {
+                        if (line.substr(0, funcname.size()) == funcname) {
+                            isFunc = true;
+                        }
+                    }
+                }
+                if (line.size() >= 4) {
+                    if (line.substr(0, 4) == "set ") {
+                        isSet = true;
+                        //std::cout << "sets have been implemented\n";
+                    }
+                }
+                if (line.size() >= 7) {
+                    if (line.substr(0, 7) == "ifgoto ") {
+                        isIfGoto = true;
+                    }
                 }
             }
-            if (line.substr(0, 4) == "set ") {
-                isSet = true;
-                //std::cout << "sets have been implemented\n";
+            catch (std::out_of_range) {
+                fprintf(stderr, "There seems to be an unidentified error in your code");
             }
+            if (line.substr(0, 5) == "goto ")
+                isGoto = true;
             if (isFunc)
                 return LineType::funccall;
             if (isSet)
                 return LineType::set;
+            if (isGoto)
+                return LineType::ascgoto;
+            if (isIfGoto)
+                return LineType::ifgoto;
             fprintf(stderr, "Unknown action type, behavior may be undefined\n");
             return LineType::unknown;
         }
@@ -145,6 +200,7 @@ namespace ASC {
             bool isvar = true;
             ASCArg curarg;
             bool sdec = false;
+            bool negative = false;
             curarg.second = ASCType("nil", ASCTypes::nil);
             for (int i = 0; i < list.size(); i++) {
                 if (!(newtype && list[i] == ' ')) {
@@ -153,7 +209,10 @@ namespace ASC {
                         sdec = false;
                         //std::cout << "list[i] = " << list[i] << "\n";
                     }
-                    if (isdigit(list[i]) && newtype) {
+                    if ((isdigit(list[i]) || list[i] == '-') && newtype) {
+                        if (list[i] == '-') {
+                            negative = true;
+                        }
                         ctype = ASCTypes::integer;
                         curarg.second.name = "integer";
                         curarg.second.type = ctype;
@@ -161,7 +220,7 @@ namespace ASC {
                         newtype = false;
                     }
                     if (ctype == ASCTypes::integer && !(list[i] == ',' || list[i] == ')')) {
-                        if (!isdigit(list[i])) {
+                        if (!(isdigit(list[i]) || list[i] == '-')) {
                             ctype = ASCTypes::errored;
                             curarg.second.name = "errored";
                             curarg.second.type = ctype;
@@ -215,6 +274,7 @@ namespace ASC {
                             //std::cout << "result: " << result << " end\n";
                             //std::cout << "vars[result]: " << vars[result] << " end\n";
                             replace(list, result, vars[result]);
+                            //std::cout << "list: " << list << "\n";
                             //std::cout << "new list: " << list << " end\n";
                             sdec = true;
                         }
@@ -223,6 +283,9 @@ namespace ASC {
                     if (list[i] == ',' && !insstr || list[i] == ')' && !insstr) {
                         if (i + 1 < list.size())
                             i++;
+                        if (ctype == ASCTypes::integer && negative) {
+                            curarg.first *= -1;
+                        }
                         result.push_back(curarg);
                         //std::cout << "string: " << ASCToString(curarg) << "\n";
                         curarg = ASCArg();
@@ -231,6 +294,7 @@ namespace ASC {
                         insstr = false;
                         newtype = true;
                         isvar = true;
+                        negative = false;
                     }
                 }
             }
@@ -238,7 +302,7 @@ namespace ASC {
         }
     };
 }
-void ASCPrintf(std::vector <ASCArg> args) {
+void ASCPrintf(std::vector<ASCArg> args, void* con) {
     if (args.size() < 1) {
         fprintf(stderr, "1 or more arguments needed for printf, %i passed\n", (int)args.size());
         return;
@@ -259,8 +323,34 @@ void ASCPrintf(std::vector <ASCArg> args) {
     }
     std::cout << "\n";
 }
-int main() {
-    ASC::ASCContext asc("code.as");
+void increment(std::vector<ASCArg> args, void* conptr) {
+    ASC::ASCContext* con = (ASC::ASCContext*)conptr;
+    if (args.size() != 2) {
+        fprintf(stderr, "2 arguments required for increment, %i passed", (int)args.size());
+        return;
+    }
+    if (args[0].second.type != ASCTypes::string) {
+        fprintf(stderr, "String expected for argument 1, %s passed", args[0].second.name.c_str());
+    }
+    if (args[1].second.type != ASCTypes::integer) {
+        fprintf(stderr, "Integer expected for argument 2, %s passed", args[0].second.name.c_str());
+    }
+    con->getVars()[ASC::ASCToString(args[0])] = std::to_string(stoi(con->getVars()[ASC::ASCToString(args[0])]) + ASC::ASCToInteger(args[1]));
+    //std::cout << "incremented: " << con->getVars()[ASC::ASCToString(args[0])] << "\n";
+    ASC::ASCCleanString(args[0]);
+}
+
+int main(int argc, char** argv) {
+    if (argc <= 1) {
+        fprintf(stderr, "Usage: %s (filename)", argv[0]);
+        return 0;
+    }
+    if (!std::filesystem::exists(argv[1])) {
+        fprintf(stderr, "File \"%s\" not found\nUsage: %s (filename)", argv[1], argv[0]);
+        return 0;
+    }
+    ASC::ASCContext asc(argv[1]);
     asc.regfunc("printf", ASCPrintf);
+    asc.regfunc("increment", increment);
     asc.run();
 }

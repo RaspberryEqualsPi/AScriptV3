@@ -1,0 +1,14 @@
+set part1 "hello, this is entirely comprised of variables. Along with that, ";
+set part2 "2 - 6 = ";
+set part3 -4, ", the four you just saw was an integer";
+printf("Hello world, this is written as \"hello world\" in the code, and contains things like commas and quotation marks which i have finally ironed the bugs out of, i can even say \\!");
+printf(part1, part2, part3);
+set part4 "You can even put multiple arguements in one!", " If you look at this", " code, you will see that these are comma seperated";
+printf(part4);
+set part5 "Sadly, you cannot put code as a variable, that would have been really useful though";
+printf(part5);
+printf("and that was my presentation on the new variables, written using variables");
+set part6 5;
+printf("Decrementing by 1: ", part6);
+increment("part6", -1);
+ifgoto part6 12;
